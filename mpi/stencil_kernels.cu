@@ -34,7 +34,7 @@ __global__ void initialize_boundaries(real* __restrict__ const a_new, real* __re
     }
 }
 
-void launch_initialize_boundaries(real* __restrict__ const a_new, real* __restrict__ const a,
+void diriclet_boundary(real* __restrict__ const a_new, real* __restrict__ const a,
                                   const real pi, const int offset, const int nx, const int my_ny,
                                   const int ny) {
     initialize_boundaries<<<my_ny / 128 + 1, 128>>>(a_new, a, pi, offset, nx, my_ny, ny);
@@ -64,7 +64,7 @@ __global__ void jacobi_kernel(real* __restrict__ const a_new, const real* __rest
     }
 }
 
-void launch_jacobi_kernel(real* __restrict__ const a_new, const real* __restrict__ const a,
+void stencil_kernel(real* __restrict__ const a_new, const real* __restrict__ const a,
                           real* __restrict__ const l2_norm, const int iy_start, const int iy_end,
                           const int nx, const bool calculate_norm, cudaStream_t stream) {
     constexpr int dim_block_x = 32;
