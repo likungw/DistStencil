@@ -53,6 +53,12 @@ void stencil_kernel(real* __restrict__ const a_new, const real* __restrict__ con
 double serial_impl(const int nx, const int ny, const int iter_max, real* const a_ref_h,
                   const int nccheck, const bool print);
 
+double parallel_impl(const int rank, const int size, const int nx, const int ny, 
+                const int iter_max, real* const a_h, const int nccheck, const bool print);
+
+void check(const int rank, const int size, const int nx, const int ny, real* const a_ref_h, 
+                real* const a_h,  const double s_elapse, const double p_elapse);
+
 template <typename T>
 T get_argval(char** begin, char** end, const std::string& arg, const T default_val) {
     T argval = default_val;

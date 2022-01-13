@@ -124,45 +124,8 @@ double serial_impl(const int nx, const int ny, const int iter_max, real* const a
     return (stop - start);
 }
 
-int main(int argc, char* argv[]) {
-
-    int size, rank;
-
-    MPI_CALL(MPI_Init(&argc, &argv));
-    MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
-    MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &size));
-
-
-    const int iter_max = get_argval<int>(argv, argv + argc, "-niter", 200);
-    const int nccheck = get_argval<int>(argv, argv + argc, "-nccheck", 1);
-    const int nx = get_argval<int>(argv, argv + argc, "-nx", 16384);
-    const int ny = get_argval<int>(argv, argv + argc, "-ny", 16384);
-
-    //This code gets your local rank on a node 
-    int local_rank = -1;
-    {
-        MPI_Comm local_comm;
-        MPI_CALL(MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL,
-                                     &local_comm));
-
-        MPI_CALL(MPI_Comm_rank(local_comm, &local_rank));
-
-        MPI_CALL(MPI_Comm_free(&local_comm));
-    }
-    int num_devices = 0;
-    // TODO: Get the available GPU devices into `num_devices` and use it and the current rank to set the active GPU.
-    CUDA_RT_CALL(cudaGetDeviceCount(&num_devices));
-    CUDA_RT_CALL(cudaSetDevice(local_rank%num_devices));
-    CUDA_RT_CALL(cudaFree(0));
-
-    real* a_ref_h;
-    CUDA_RT_CALL(cudaMallocHost(&a_ref_h, nx * ny * sizeof(real)));
-    real* a_h;
-    CUDA_RT_CALL(cudaMallocHost(&a_h, nx * ny * sizeof(real)));
-    
-    double runtime_serial = serial_impl(nx, ny, iter_max, a_ref_h, nccheck, (0 == rank));
-
-
+double parallel_impl(const int rank, const int size, const int nx, const int ny, 
+                const int iter_max, real* const a_h, const int nccheck, const bool print){
     int chunk_size = (ny-2) / size;
     if(rank==size-1)
       chunk_size += (ny-2) % size;
@@ -266,7 +229,26 @@ int main(int argc, char* argv[]) {
                             std::min((ny - iy_start_global) * nx, chunk_size * nx) * sizeof(real),
                             cudaMemcpyDeviceToHost));
 
+    
+    CUDA_RT_CALL(cudaEventDestroy(compute_done));
+    CUDA_RT_CALL(cudaStreamDestroy(compute_stream));
+
+    CUDA_RT_CALL(cudaFreeHost(l2_norm_h));
+    CUDA_RT_CALL(cudaFree(l2_norm_d));
+
+    CUDA_RT_CALL(cudaFree(a_new));
+    CUDA_RT_CALL(cudaFree(a));
+    return (stop - start);
+}
+
+void check(const int rank, const int size, const int nx, const int ny, real* const a_ref_h, 
+                real* const a_h,  const double s_elapse, const double p_elapse){
     int result_correct = 1;
+    int iy_start_global = rank * ((ny-2)/size)+1;
+    int chunk_size = (ny-2) / size;
+    if(rank==size-1)
+      chunk_size += (ny-2) % size;
+    int iy_end_global = iy_start_global + chunk_size - 1; 
     for (int iy = iy_start_global; result_correct && (iy < iy_end_global); ++iy) {
         for (int ix = 1; result_correct && (ix < (nx - 1)); ++ix) {
             if (std::fabs(a_ref_h[iy * nx + ix] - a_h[iy * nx + ix]) > tol) {
@@ -289,17 +271,53 @@ int main(int argc, char* argv[]) {
         printf(
             "%dx%d: 1 GPU: %8.4f s, %d GPUs: %8.4f s, speedup: %8.2f, "
             "efficiency: %8.2f \n",
-            ny, nx, runtime_serial, size, (stop - start), runtime_serial / (stop - start),
-            runtime_serial / (size * (stop - start)) * 100);   
+            ny, nx, s_elapse, size, p_elapse, s_elapse / p_elapse,
+            s_elapse / (size * p_elapse) * 100);   
     }
-    CUDA_RT_CALL(cudaEventDestroy(compute_done));
-    CUDA_RT_CALL(cudaStreamDestroy(compute_stream));
+}
 
-    CUDA_RT_CALL(cudaFreeHost(l2_norm_h));
-    CUDA_RT_CALL(cudaFree(l2_norm_d));
+int main(int argc, char* argv[]) {
 
-    CUDA_RT_CALL(cudaFree(a_new));
-    CUDA_RT_CALL(cudaFree(a));
+    int size, rank;
+
+    MPI_CALL(MPI_Init(&argc, &argv));
+    MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
+    MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &size));
+
+
+    const int iter_max = get_argval<int>(argv, argv + argc, "-niter", 200);
+    const int nccheck = get_argval<int>(argv, argv + argc, "-nccheck", 1);
+    const int nx = get_argval<int>(argv, argv + argc, "-nx", 16384);
+    const int ny = get_argval<int>(argv, argv + argc, "-ny", 16384);
+
+    //This code gets your local rank on a node 
+    int local_rank = -1;
+    int iy_start_global = rank * ((ny-2)/size)+1;
+    {
+        MPI_Comm local_comm;
+        MPI_CALL(MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL,
+                                     &local_comm));
+
+        MPI_CALL(MPI_Comm_rank(local_comm, &local_rank));
+
+        MPI_CALL(MPI_Comm_free(&local_comm));
+    }
+    int num_devices = 0;
+    // TODO: Get the available GPU devices into `num_devices` and use it and the current rank to set the active GPU.
+    CUDA_RT_CALL(cudaGetDeviceCount(&num_devices));
+    CUDA_RT_CALL(cudaSetDevice(local_rank%num_devices));
+    CUDA_RT_CALL(cudaFree(0));
+
+    real* a_ref_h;
+    CUDA_RT_CALL(cudaMallocHost(&a_ref_h, nx * ny * sizeof(real)));
+    real* a_h;
+    CUDA_RT_CALL(cudaMallocHost(&a_h, nx * ny * sizeof(real)));
+    
+    double runtime_serial = serial_impl(nx, ny, iter_max, a_ref_h, nccheck, (0 == rank));
+    double runtime_parallel = parallel_impl(rank, size, nx, ny, iter_max, a_h, nccheck, (0 == rank));
+
+    check(rank, size, nx, ny, a_ref_h, a_h, runtime_serial,runtime_parallel);
+    
 
     CUDA_RT_CALL(cudaFreeHost(a_h));
     CUDA_RT_CALL(cudaFreeHost(a_ref_h));
