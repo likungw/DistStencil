@@ -1,7 +1,13 @@
 
 #include <cstdio>
 
-
+#ifdef USE_DOUBLE
+typedef double real;
+#define MPI_REAL_TYPE MPI_DOUBLE
+#else
+typedef float real;
+#define MPI_REAL_TYPE MPI_FLOAT
+#endif
 
 #define CUDA_RT_CALL(call)                                                                  \
     {                                                                                       \
@@ -13,14 +19,6 @@
                     "%s (%d).\n",                                                           \
                     #call, __LINE__, __FILE__, cudaGetErrorString(cudaStatus), cudaStatus); \
     }
-
-#ifdef USE_DOUBLE
-typedef double real;
-#define MPI_REAL_TYPE MPI_DOUBLE
-#else
-typedef float real;
-#define MPI_REAL_TYPE MPI_FLOAT
-#endif
 
 __global__ void initialize_boundaries(real* __restrict__ const a_new, real* __restrict__ const a,
                                       const real pi, const int offset, const int nx,
@@ -46,17 +44,19 @@ __global__ void jacobi_kernel(real* __restrict__ const a_new, const real* __rest
                               real* __restrict__ const l2_norm, const int iy_start,
                               const int iy_end, const int nx, const bool calculate_norm) {
 
-    int iy = blockIdx.y * blockDim.y + threadIdx.y + iy_start;
-    int ix = blockIdx.x * blockDim.x + threadIdx.x + 1;
     real local_l2_norm = 0.0;
 
-    if (iy < iy_end && ix < (nx - 1)) {
-        const real new_val = 0.25 * (a[iy * nx + ix + 1] + a[iy * nx + ix - 1] +
-                                     a[(iy + 1) * nx + ix] + a[(iy - 1) * nx + ix]);
-        a_new[iy * nx + ix] = new_val;
-        if (calculate_norm) {
-            real residue = new_val - a[iy * nx + ix];
-            local_l2_norm += residue * residue;
+    for (int iy = blockIdx.y * blockDim.y + threadIdx.y + iy_start; iy < iy_end; iy += blockDim.y * gridDim.y){
+        for (int ix = blockIdx.x * blockDim.x + threadIdx.x + 1; ix < (nx - 1); ix += blockDim.x * gridDim.x){
+            if (iy < iy_end && ix < (nx - 1)){
+                const real new_val = 0.25 * (a[iy * nx + ix + 1] + a[iy * nx + ix - 1] +
+                                            a[(iy + 1) * nx + ix] + a[(iy - 1) * nx + ix]);
+                a_new[iy * nx + ix] = new_val;
+                if (calculate_norm) {
+                    real residue = new_val - a[iy * nx + ix];
+                    local_l2_norm += residue * residue;
+                }
+            }
         }
     }
     if (calculate_norm) {

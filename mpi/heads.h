@@ -1,4 +1,7 @@
 #include <cuda_runtime.h>
+
+
+
 #define MPI_CALL(call)                                                            \
 {                                                                                 \
     int mpi_status = call;                                                        \
@@ -56,7 +59,7 @@ double serial_impl(const int nx, const int ny, const int iter_max, real* const a
 double parallel_impl(const int rank, const int size, const int nx, const int ny, 
                 const int iter_max, real* const a_h, const int nccheck, const bool print);
 
-void check(const int rank, const int size, const int nx, const int ny, real* const a_ref_h, 
+int check(const int rank, const int size, const int nx, const int ny, real* const a_ref_h, 
                 real* const a_h,  const double s_elapse, const double p_elapse);
 
 template <typename T>
