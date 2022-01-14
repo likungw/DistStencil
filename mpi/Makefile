@@ -30,7 +30,7 @@ stencil_kernels.o: Makefile stencil_kernels.cu
 
 .PHONY.: clean
 clean:
-	rm -f stencil *.o *.nsys-rep stencil.*.compute-sanitizer.log
+	rm -f stencil *.o 
 
 run: stencil
 	$(JSC_SUBMIT_CMD) -n $(NP) ./stencil

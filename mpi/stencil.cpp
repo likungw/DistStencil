@@ -84,7 +84,6 @@ double serial_impl(const int nx, const int ny, const int iter_max, real* const a
         }
 
         // Apply periodic boundary conditions
-
         CUDA_RT_CALL(cudaStreamWaitEvent(push_top_stream, compute_done, 0));
         CUDA_RT_CALL(cudaMemcpyAsync(a_new, a_new + (iy_end - 1) * nx, nx * sizeof(real),
                                      cudaMemcpyDeviceToDevice, push_top_stream));
@@ -92,7 +91,7 @@ double serial_impl(const int nx, const int ny, const int iter_max, real* const a
 
         CUDA_RT_CALL(cudaStreamWaitEvent(push_bottom_stream, compute_done, 0));
         CUDA_RT_CALL(cudaMemcpyAsync(a_new + iy_end * nx, a_new + iy_start * nx, nx * sizeof(real),
-                                     cudaMemcpyDeviceToDevice, compute_stream));
+                                     cudaMemcpyDeviceToDevice, push_bottom_stream));
         CUDA_RT_CALL(cudaEventRecord(push_bottom_done, push_bottom_stream));
 
         if (calculate_norm) {
@@ -323,8 +322,7 @@ int main(int argc, char* argv[]) {
     CUDA_RT_CALL(cudaFreeHost(a_ref_h));
 
     MPI_CALL(MPI_Finalize());
-    return 0;
-    //return (result_correct == 1) ? 0 : 1;
+    return (result_correct == 1) ? 0 : 1;
 }
 
 
