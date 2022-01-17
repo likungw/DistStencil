@@ -125,9 +125,15 @@ double serial_impl(const int nx, const int ny, const int iter_max, real* const a
 
 double parallel_impl(const int rank, const int size, const int nx, const int ny, 
                 const int iter_max, real* const a_h, const int nccheck, const bool print){
-    int chunk_size = (ny-2) / size;
-    if(rank==size-1)
-      chunk_size += (ny-2) % size;
+    int chunk_size;
+    int chunk_size_low = (ny - 2) / size;
+    int chunk_size_high = chunk_size_low + 1;
+    // num_ranks_low * chunk_size_low + (size - num_ranks_low) * (chunk_size_low + 1) = ny - 2
+    int num_ranks_low = size * chunk_size_low + size - (ny - 2); 
+    if (rank < num_ranks_low)
+        chunk_size = chunk_size_low;
+    else
+        chunk_size = chunk_size_high;
 
     real* a;
     CUDA_RT_CALL(cudaMalloc(&a, nx * (chunk_size + 2) * sizeof(real)));
@@ -137,10 +143,18 @@ double parallel_impl(const int rank, const int size, const int nx, const int ny,
     CUDA_RT_CALL(cudaMemset(a, 0, nx * (chunk_size + 2) * sizeof(real)));
     CUDA_RT_CALL(cudaMemset(a_new, 0, nx * (chunk_size + 2) * sizeof(real)));
 
-    int iy_start_global = rank * ((ny-2)/size)+1;
+    // Calculate local domain boundaries
+    int iy_start_global;  // My start index in the global array
+    if (rank < num_ranks_low) {
+        iy_start_global = rank * chunk_size_low + 1;
+    } else {
+        iy_start_global =
+            num_ranks_low * chunk_size_low + (rank - num_ranks_low) * chunk_size_high + 1;
+    }
     int iy_end_global = iy_start_global + chunk_size - 1;  // My last index in the global array
-    int iy_start = 1; // My local start index for computation
-    int iy_end = iy_start + chunk_size; //My local last index
+
+    int iy_start = 1;
+    int iy_end = iy_start + chunk_size;
 
     
     // Set diriclet boundary conditions on left and right boarder
@@ -271,11 +285,26 @@ double parallel_impl(const int rank, const int size, const int nx, const int ny,
 int check(const int rank, const int size, const int nx, const int ny, real* const a_ref_h, 
                 real* const a_h,  const double s_elapse, const double p_elapse){
     int result_correct = 1;
-    int iy_start_global = rank * ((ny-2)/size)+1;
-    int chunk_size = (ny-2) / size;
-    if(rank==size-1)
-        chunk_size += (ny-2) % size;
-    int iy_end_global = iy_start_global + chunk_size - 1; 
+    int chunk_size;
+    int chunk_size_low = (ny - 2) / size;
+    int chunk_size_high = chunk_size_low + 1;
+    int num_ranks_low = size * chunk_size_low + size - (ny - 2); 
+    if (rank < num_ranks_low)
+        chunk_size = chunk_size_low;
+    else
+        chunk_size = chunk_size_high;
+
+    // Calculate local domain boundaries
+    int iy_start_global;  // My start index in the global array
+    if (rank < num_ranks_low) {
+        iy_start_global = rank * chunk_size_low + 1;
+    } else {
+        iy_start_global =
+            num_ranks_low * chunk_size_low + (rank - num_ranks_low) * chunk_size_high + 1;
+    }
+    int iy_end_global = iy_start_global + chunk_size - 1;  // My last index in the global array
+
+
     for (int iy = iy_start_global; result_correct && (iy < iy_end_global); ++iy) {
         for (int ix = 1; result_correct && (ix < (nx - 1)); ++ix) {
             if (std::fabs(a_ref_h[iy * nx + ix] - a_h[iy * nx + ix]) > tol) {
