@@ -1,4 +1,4 @@
-NP ?= 28
+NP ?= 8
 NVCC=/usr/local/cuda-11.3/bin/nvcc
 JSC_SUBMIT_CMD ?= /home/v-liku/openmpiucx/bin/mpirun 
 CUDA_HOME ?= /usr/local/cuda-11.3

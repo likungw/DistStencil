@@ -147,10 +147,26 @@ double parallel_impl(const int rank, const int size, const int nx, const int ny,
     diriclet_boundary(a, a_new, PI, iy_start_global - 1, nx, (chunk_size + 2), ny);
     CUDA_RT_CALL(cudaDeviceSynchronize());
 
+    //Overlapped Optimization.
+    int leastPriority = 0;
+    int greatestPriority = leastPriority;
+    CUDA_RT_CALL(cudaDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority));
+
+    cudaStream_t push_top_stream;
+    cudaEvent_t push_top_done;
+    CUDA_RT_CALL(cudaEventCreateWithFlags(&push_top_done, cudaEventDisableTiming));
+    cudaStream_t push_bottom_stream;
+    cudaEvent_t push_bottom_done;
+    CUDA_RT_CALL(cudaEventCreateWithFlags(&push_bottom_done, cudaEventDisableTiming));
     cudaStream_t compute_stream;
-    CUDA_RT_CALL(cudaStreamCreate(&compute_stream));
     cudaEvent_t compute_done;
     CUDA_RT_CALL(cudaEventCreateWithFlags(&compute_done, cudaEventDisableTiming));
+    cudaEvent_t reset_l2norm_done;
+    CUDA_RT_CALL(cudaEventCreateWithFlags(&reset_l2norm_done, cudaEventDisableTiming));
+
+    CUDA_RT_CALL(cudaStreamCreateWithPriority(&compute_stream, cudaStreamDefault, leastPriority));
+    CUDA_RT_CALL(cudaStreamCreateWithPriority(&push_top_stream, cudaStreamDefault, greatestPriority));
+    CUDA_RT_CALL(cudaStreamCreateWithPriority(&push_bottom_stream, cudaStreamDefault, greatestPriority));
 
     real* l2_norm_d;
     CUDA_RT_CALL(cudaMalloc(&l2_norm_d, sizeof(real)));
@@ -175,13 +191,31 @@ double parallel_impl(const int rank, const int size, const int nx, const int ny,
     while (l2_norm > tol && iter < iter_max) {
         CUDA_RT_CALL(cudaMemsetAsync(l2_norm_d, 0, sizeof(real), compute_stream));
 
+        //Overlapped Optimization.
+        CUDA_RT_CALL(cudaEventRecord(reset_l2norm_done, compute_stream));
+
         calculate_norm = (iter % nccheck) == 0 || ((iter % 100) == 0);
 
-        stencil_kernel(a_new, a, l2_norm_d, iy_start, iy_end, nx, calculate_norm,
+        //Overlapped Optimization.
+        stencil_kernel(a_new, a, l2_norm_d, (iy_start + 1), (iy_end - 1), nx, calculate_norm,
                              compute_stream);
         CUDA_RT_CALL(cudaEventRecord(compute_done, compute_stream));
 
+        CUDA_RT_CALL(cudaStreamWaitEvent(push_top_stream, reset_l2norm_done, 0));
+        stencil_kernel(a_new, a, l2_norm_d, iy_start, (iy_start + 1), nx, calculate_norm,
+                             push_top_stream);
+        CUDA_RT_CALL(cudaEventRecord(push_top_done, push_top_stream));
+
+        CUDA_RT_CALL(cudaStreamWaitEvent(push_bottom_stream, reset_l2norm_done, 0));
+        stencil_kernel(a_new, a, l2_norm_d, (iy_end - 1), iy_end, nx, calculate_norm,
+                             push_bottom_stream);
+        CUDA_RT_CALL(cudaEventRecord(push_bottom_done, push_bottom_stream));
+
         if (calculate_norm) {
+            //Overlapped Optimization.
+            CUDA_RT_CALL(cudaStreamWaitEvent(compute_stream, push_top_done, 0));
+            CUDA_RT_CALL(cudaStreamWaitEvent(compute_stream, push_bottom_done, 0));
+
             CUDA_RT_CALL(cudaMemcpyAsync(l2_norm_h, l2_norm_d, sizeof(real), cudaMemcpyDeviceToHost,
                                          compute_stream));
         }
@@ -191,10 +225,14 @@ double parallel_impl(const int rank, const int size, const int nx, const int ny,
         const int bottom = (rank + 1) % size;
 
         // TODO: Use MPI_Sendrecv to exchange the data with the top and bottom neighbors by CUDA-aware MPI.
-        CUDA_RT_CALL(cudaEventSynchronize(compute_done));
+        //Overlapped Optimization.
+        CUDA_RT_CALL(cudaStreamSynchronize(push_top_stream));
         MPI_CALL(MPI_Sendrecv(a_new + iy_start * nx, nx, MPI_REAL_TYPE, top, 0,
                               a_new + (iy_end * nx), nx, MPI_REAL_TYPE, bottom, 0, MPI_COMM_WORLD,
                               MPI_STATUS_IGNORE));
+
+        //Overlapped Optimization.                   
+        CUDA_RT_CALL(cudaStreamSynchronize(push_bottom_stream));
         MPI_CALL(MPI_Sendrecv(a_new + (iy_end - 1) * nx, nx, MPI_REAL_TYPE, bottom, 0, a_new, nx,
                               MPI_REAL_TYPE, top, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
 
@@ -277,8 +315,8 @@ int main(int argc, char* argv[]) {
 
     const int iter_max = get_argval<int>(argv, argv + argc, "-niter", 200);
     const int nccheck = get_argval<int>(argv, argv + argc, "-nccheck", 1);
-    const int nx = get_argval<int>(argv, argv + argc, "-nx", 16384);
-    const int ny = get_argval<int>(argv, argv + argc, "-ny", 16384);
+    const int nx = get_argval<int>(argv, argv + argc, "-nx", 4096);
+    const int ny = get_argval<int>(argv, argv + argc, "-ny", 4096);
 
     int local_rank = -1;
     int iy_start_global = rank * ((ny-2)/size)+1;
