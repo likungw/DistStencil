@@ -299,6 +299,8 @@ int main(int argc, char* argv[]) {
     //TODO: Init device.
     CUDA_RT_CALL(cudaFree(0));
 
+    printf("My rank is %d of %d, local: %d\n",rank,size,local_rank);
+
     real* a_ref_h;
     CUDA_RT_CALL(cudaMallocHost(&a_ref_h, nx * ny * sizeof(real)));
     real* a_h;
